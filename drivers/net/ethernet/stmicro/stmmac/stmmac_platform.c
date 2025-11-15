@@ -784,7 +784,16 @@ static int stmmac_noirq_resume(struct device *dev)
 	if (!device_may_wakeup(priv->device) || !priv->plat->pmt)
 		ret = stmmac_bus_clks_enable(priv, true);
 
-	return ret;
+		ret = clk_prepare_enable(priv->plat->clk_ptp_ref);
+		if (ret < 0) {
+			netdev_warn(priv->dev,
+				    "failed to enable PTP reference clock: %pe\n",
+				    ERR_PTR(ret));
+			return ret;
+		}
+	}
+
+	return 0;
 }
 #endif /* CONFIG_PM_SLEEP */
 
