@@ -217,33 +217,11 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 
 	pci_dbg(bridge, "broadcast error_detected message\n");
 	if (state == pci_channel_io_frozen) {
-		pci_walk_bus(bus, report_frozen_detected, &status);
-		/*
-		 * After resetting the link using reset_link() call, the
-		 * possible value of error status is either
-		 * PCI_ERS_RESULT_DISCONNECT (failure case) or
-		 * PCI_ERS_RESULT_NEED_RESET (success case).
-		 * So ignore the return value of report_error_detected()
-		 * call for fatal errors.
-		 *
-		 * In EDR mode, since AER and DPC Capabilities are owned by
-		 * firmware, reported_error_detected() will return error
-		 * status PCI_ERS_RESULT_NO_AER_DRIVER. Continuing
-		 * pcie_do_recovery() with error status as
-		 * PCI_ERS_RESULT_NO_AER_DRIVER will report recovery failure
-		 * irrespective of recovery status. But successful reset_link()
-		 * call usually recovers all fatal errors. So ignoring the
-		 * status result of report_error_detected() also helps EDR based
-		 * error recovery.
-		 */
-		status = reset_link(dev);
-		if (status == PCI_ERS_RESULT_RECOVERED) {
-			status = PCI_ERS_RESULT_NEED_RESET;
-		} else {
-			status = PCI_ERS_RESULT_DISCONNECT;
-			pci_warn(dev, "link reset failed\n");
-			goto failed;
-		}
+        pci_walk_bridge(bridge, report_frozen_detected, &status);
+        if (reset_subordinates(bridge) != PCI_ERS_RESULT_RECOVERED) {
+            pci_warn(bridge, "subordinate device reset failed\n");
+              goto failed;
+        }
 	} else {
 		pci_walk_bridge(bridge, report_normal_detected, &status);
 	}

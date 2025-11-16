@@ -722,6 +722,7 @@ static int imx_clk_init_on(struct device_node *np,
 	kfree(array);
 
 	return 0;
+}
 
 struct imx8mp_clock_constraints {
 	unsigned int clkid;

@@ -74,6 +74,11 @@ struct rpmsg_endpoint_ops {
 			     poll_table *wait);
 };
 
+int rpmsg_register_device(struct rpmsg_device *rpdev);
+int rpmsg_unregister_device(struct device *parent,
+                            struct rpmsg_channel_info *chinfo);
+
+
 struct device *rpmsg_find_device(struct device *parent,
 				 struct rpmsg_channel_info *chinfo);
 
