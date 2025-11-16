@@ -4225,14 +4225,19 @@ static int dpaa2_eth_connect_mac(struct dpaa2_eth_priv *priv)
 	if (PTR_ERR(dpmac_dev) == -EPROBE_DEFER)
 		return PTR_ERR(dpmac_dev);
 
-	if (IS_ERR(dpmac_dev) || dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type)
+	if (IS_ERR(dpmac_dev))
 		return 0;
 
-	dpaa2_eth_dpmac_driver_detach(dpmac_dev);
+	if (dpmac_dev->dev.type != &fsl_mc_bus_dpmac_type) {
+		err = 0;
+		goto out_put_device;
+	}
 
 	mac = kzalloc(sizeof(struct dpaa2_mac), GFP_KERNEL);
-	if (!mac)
-		return -ENOMEM;
+	if (!mac) {
+		err = -ENOMEM;
+		goto out_put_device;
+	}
 
 	mac->mc_dev = dpmac_dev;
 	mac->mc_io = priv->mc_io;
@@ -4258,6 +4263,8 @@ err_close_mac:
 	priv->mac = NULL;
 err_free_mac:
 	kfree(mac);
+out_put_device:
+	put_device(&dpmac_dev->dev);
 	return err;
 }
 
@@ -4271,6 +4278,7 @@ static void dpaa2_eth_disconnect_mac(struct dpaa2_eth_priv *priv)
 
 	dpaa2_mac_close(priv->mac);
 	dpaa2_eth_dpmac_driver_attach(priv->mac->mc_dev);
+
 	kfree(priv->mac);
 	priv->mac = NULL;
 }
@@ -4298,6 +4306,7 @@ static irqreturn_t dpni_irq0_handler_thread(int irq_num, void *arg)
 		dpaa2_eth_set_mac_addr(netdev_priv(net_dev));
 		dpaa2_eth_update_tx_fqids(priv);
 
+		rtnl_lock();
 		if (dpaa2_eth_has_mac(priv))
 			dpaa2_eth_disconnect_mac(priv);
 		else

@@ -326,15 +326,17 @@ int dpaa2_mac_connect(struct dpaa2_mac *mac)
 
 	mac->if_link_type = mac->attr.link_type;
 
-	dpmac_node = mac->fw_node;
+	dpmac_node = dpaa2_mac_get_node(mac->attr.id);
 	if (!dpmac_node) {
 		netdev_err(net_dev, "No dpmac@%d node found.\n", mac->attr.id);
 		return -ENODEV;
 	}
 
 	err = dpaa2_mac_get_if_mode(dpmac_node, mac->attr);
-	if (err < 0)
-		return -EINVAL;
+	if (err < 0) {
+		err = -EINVAL;
+		goto err_put_node;
+	}
 	mac->if_mode = err;
 
 	/* The MAC does not have the capability to add RGMII delays so
@@ -349,9 +351,8 @@ int dpaa2_mac_connect(struct dpaa2_mac *mac)
 		return -EINVAL;
 	}
 
-	if ((mac->attr.link_type == DPMAC_LINK_TYPE_PHY &&
-	     mac->attr.eth_if != DPMAC_ETH_IF_RGMII) ||
-	    mac->attr.link_type == DPMAC_LINK_TYPE_BACKPLANE) {
+	if (mac->attr.link_type == DPMAC_LINK_TYPE_PHY &&
+	    mac->attr.eth_if != DPMAC_ETH_IF_RGMII) {
 		err = dpaa2_pcs_create(mac, dpmac_node, mac->attr.id);
 		if (err)
 			return err;
@@ -386,6 +387,8 @@ err_phylink_destroy:
 	phylink_destroy(mac->phylink);
 err_pcs_destroy:
 	dpaa2_pcs_destroy(mac);
+err_put_node:
+	of_node_put(dpmac_node);
 
 	return err;
 }
