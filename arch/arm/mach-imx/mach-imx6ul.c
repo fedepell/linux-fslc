@@ -14,6 +14,51 @@
 
 #include "common.h"
 #include "cpuidle.h"
+#include <linux/idscount.h>
+#include <linux/irq.h>
+
+
+struct idscount_plat_data idscount1_pd = {
+  .pin = 67,   // GPIO3_03 32*2+3
+  .mode = IRQ_TYPE_EDGE_BOTH,
+};
+
+static struct platform_device idscount1 = {
+        .name           = "idscount",
+        .id             = 0,
+        .dev            = {
+                .platform_data  = &idscount1_pd,
+        }
+};
+
+struct idscount_plat_data idscount2_pd = {
+  .pin = 66,   // GPIO3_02 32*2+2
+  .mode = IRQ_TYPE_EDGE_BOTH,
+};
+
+static struct platform_device idscount2 = {
+        .name           = "idscount",
+        .id             = 1,
+        .dev            = {
+                .platform_data  = &idscount2_pd,
+        }
+};
+
+// Leaving commented for future use
+/*
+struct idscount_plat_data idscount3_pd = {
+  .pin = 65,   // GPIO3_01 32*2+1
+  .mode = IRQ_TYPE_EDGE_BOTH,
+};
+
+static struct platform_device idscount3 = {
+        .name           = "idscount",
+        .id             = 2,
+        .dev            = {
+                .platform_data  = &idscount3_pd,
+        }
+};
+*/
 
 static void __init imx6ul_enet_clk_init(void)
 {
@@ -66,6 +111,9 @@ static void __init imx6ul_init_machine(void)
 	imx6ul_enet_init();
 	imx_anatop_init();
 	imx6ul_pm_init();
+	platform_device_register(&idscount1);
+	platform_device_register(&idscount2);
+	//platform_device_register(&idscount3);
 }
 
 static void __init imx6ul_init_irq(void)

@@ -1,0 +1,376 @@
+/*
+ *
+ *  idscount -- interrupt driven simple counter
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ */
+
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/types.h>
+#include <linux/timer.h>
+#include <linux/fs.h>
+#include <linux/irq.h>
+#include <linux/init.h>
+#include <linux/platform_device.h>
+#include <linux/interrupt.h>
+#include <linux/slab.h>
+
+#include <asm/uaccess.h>
+#include <asm/io.h>
+
+#include <linux/gpio.h>
+
+#include <linux/idscount.h>
+
+struct idscount_s {
+  char irq_name[20];
+  unsigned long count;
+  int val;
+  struct timespec64 last,
+                    enel_last_start;
+  spinlock_t lock;
+  struct device_attribute attr_min0,
+                          attr_min1,
+                          attr_mode,
+                          attr_count,
+                          attr_val,
+                          attr_last,
+                          attr_enel_mode,
+                          attr_enel_space,
+                          attr_enel_min_len,
+                          attr_enel_max_len,
+                          attr_enel_min_intra,
+                          attr_enel_last_start;
+};
+
+static ssize_t min1_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->min1_us );
+}
+static ssize_t min1_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->min1_us = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t min0_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->min0_us );
+}
+static ssize_t min0_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->min0_us = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t enel_mode_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->enel_mode );
+}
+static ssize_t enel_mode_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->enel_mode = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t enel_space_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->enel_space );
+}
+static ssize_t enel_space_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->enel_space = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t enel_min_len_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->enel_min_len_us );
+}
+static ssize_t enel_min_len_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->enel_min_len_us = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t enel_max_len_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->enel_max_len_us );
+}
+static ssize_t enel_max_len_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->enel_max_len_us = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t enel_min_intra_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  return sprintf( buffer, "%d", pd->enel_min_intra_us );
+}
+static ssize_t enel_min_intra_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  struct idscount_plat_data *pd = dev->platform_data;
+  pd->enel_min_intra_us = simple_strtoul( buffer, NULL, 0 );
+  return count;
+}
+
+static ssize_t mode_show(struct device *dev, struct device_attribute *attr,
+	char *buffer)
+{
+  struct idscount_plat_data *pd = dev->platform_data;
+
+  if (pd->mode == IRQ_TYPE_EDGE_BOTH)
+    sprintf(buffer, "both");
+  else if (pd->mode == IRQ_TYPE_EDGE_RISING)
+    sprintf(buffer, "rising");
+  else if (pd->mode == IRQ_TYPE_EDGE_FALLING)
+    sprintf(buffer, "falling");
+  else
+    sprintf(buffer, "invalid");
+  return strlen(buffer);
+}
+
+static ssize_t mode_store(struct device *dev, struct device_attribute *attr,
+	const char *buffer, size_t count)
+{
+  struct idscount_plat_data *pd = dev->platform_data;
+
+  if (!strncmp(buffer, "both", 4))
+    pd->mode = IRQ_TYPE_EDGE_BOTH;
+  else if (!strncmp(buffer, "rising", 6))
+    pd->mode = IRQ_TYPE_EDGE_RISING;
+  else if (!strncmp(buffer, "falling", 7))
+    pd->mode = IRQ_TYPE_EDGE_FALLING;
+
+  irq_set_irq_type(gpio_to_irq(pd->pin), pd->mode);
+  return count;
+}
+
+static ssize_t count_show(struct device *dev, struct device_attribute *attr,
+	char *buffer)
+{
+  struct idscount_s *ids = dev_get_drvdata(dev);
+  unsigned long flags;
+  unsigned long count;
+
+  spin_lock_irqsave(&ids->lock, flags);
+  count = ids->count;
+  ids->count = 0;
+  spin_unlock_irqrestore(&ids->lock, flags);
+  return sprintf(buffer, "%lu", count);
+}
+
+static ssize_t count_store(struct device *dev, struct device_attribute *attr,
+	const char *buffer, size_t count)
+{
+  return count;
+}
+
+static ssize_t val_show(struct device *dev, struct device_attribute *attr,
+	char *buffer)
+{
+  struct idscount_s *ids = dev_get_drvdata(dev);
+
+  return sprintf(buffer, "%d", ids->val);
+}
+
+static ssize_t val_store(struct device *dev, struct device_attribute *attr,
+	const char *buffer, size_t count)
+{
+  return count;
+}
+
+static ssize_t last_show(struct device *dev, struct device_attribute *attr, char *buffer)
+{
+  struct idscount_s *ids = dev_get_drvdata(dev);
+  return sprintf(buffer, "%lld.%06ld", ids->last.tv_sec, ids->last.tv_nsec/1000);
+}
+
+static ssize_t last_store(struct device *dev, struct device_attribute *attr,
+	const char *buffer, size_t count)
+{
+  return count;
+}
+
+static ssize_t enel_last_start_show( struct device *dev, struct device_attribute *attr, char *buffer ){
+  struct idscount_s *ids = dev_get_drvdata(dev);
+  return sprintf(buffer, "%lld.%06ld", ids->last.tv_sec, ids->enel_last_start.tv_nsec/1000);
+}
+
+static ssize_t enel_last_start_store( struct device *dev, struct device_attribute *attr, const char *buffer, size_t count ){
+  return count;
+}
+
+static irqreturn_t idscount_isr(int irq, void *arg)
+{
+  struct device *dev = arg;
+  struct idscount_plat_data *pd = dev->platform_data;
+  struct idscount_s *ids = dev_get_drvdata(dev);
+  struct timespec64 now;
+  int min_us;
+  unsigned int elapsed_us;
+
+  ktime_get_real_ts64(&now);
+  elapsed_us = (now.tv_sec - ids->last.tv_sec) * 1000000 + (now.tv_nsec - ids->last.tv_nsec) / 1000;
+  ids->val = gpio_get_value(pd->pin);
+
+  if( pd->enel_mode ){
+    if( ids->val != pd->enel_space ){ ids->enel_last_start = now; } /* space to mark transition */
+    else{
+      /* mark to space transition */
+      unsigned int impulse_len_us = (now.tv_sec - ids->enel_last_start.tv_sec) * 1000000 + (now.tv_nsec - ids->enel_last_start.tv_nsec) / 1000;
+      if( elapsed_us >= pd->enel_min_intra_us && impulse_len_us >= pd->enel_min_len_us && impulse_len_us <= pd->enel_max_len_us ){
+        spin_lock(&ids->lock);
+        if( elapsed_us >= pd->enel_min_intra_us ){
+          ids->count += 1;
+        }
+        ids->last = now;
+        spin_unlock( &ids->lock );
+      }
+    }
+  }
+  else{
+    if (ids->val == 1)
+      min_us = pd->min0_us;
+    else
+      min_us = pd->min1_us;
+    spin_lock(&ids->lock);
+    if (elapsed_us > min_us) {
+      ids->count += 1;
+    }
+    ids->last = now;
+    spin_unlock(&ids->lock);
+  }
+
+  return IRQ_HANDLED;
+}
+
+static int idscount_probe(struct platform_device *pdev)
+{
+	int ret = 0;
+	int err = 0;
+	struct device *dev = &pdev->dev;
+	struct idscount_plat_data *pd = dev->platform_data;
+	struct idscount_s *ids;
+	int irq_pin;
+
+	if (pd->mode != IRQ_TYPE_EDGE_FALLING && pd->mode != IRQ_TYPE_EDGE_RISING)
+	  pd->mode = IRQ_TYPE_EDGE_BOTH;
+
+	ids = kzalloc(sizeof(*ids), GFP_KERNEL);
+	if (!ids) {
+	  ret = -ENOMEM;
+	  goto probe_error;
+	}
+	spin_lock_init(&ids->lock);
+	ktime_get_real_ts64(&ids->last);
+	irq_pin = gpio_to_irq(pd->pin);
+	irq_set_irq_type(irq_pin, pd->mode);
+	sprintf(ids->irq_name, "idscount%d", pd->pin);
+	if (request_irq(irq_pin, idscount_isr, IRQF_SHARED, ids->irq_name, dev) < 0) {
+	  printk("request of irq %d for pin %d failed!\n", irq_pin, pd->pin);
+	  ret = -EINVAL;
+	  goto probe_error;
+	}
+
+#define ONE_SYSFS(X) do {						\
+	  ids->attr_ ## X.attr.mode = S_IRUGO | S_IWUSR;		\
+	  ids->attr_ ## X.attr.name = #X;				\
+	  ids->attr_ ## X.show = X ## _show;				\
+	  ids->attr_ ## X.store = X ## _store;				\
+ 	  sysfs_attr_init(&ids->attr_ ## X.attr);			\
+	  err = device_create_file(dev, &ids->attr_ ## X);		\
+	  if (err) {							\
+	    dev_err(dev,						\
+		    "Unable to create virtual file " #X "\n");		\
+	  }								\
+	} while(0)
+
+	ONE_SYSFS(min0);
+	ONE_SYSFS(min1);
+	ONE_SYSFS(count);
+	ONE_SYSFS(val);
+	ONE_SYSFS(mode);
+	ONE_SYSFS(last);
+	ONE_SYSFS(enel_mode);
+	ONE_SYSFS(enel_space);
+	ONE_SYSFS(enel_min_len);
+	ONE_SYSFS(enel_max_len);
+	ONE_SYSFS(enel_min_intra);
+	ONE_SYSFS(enel_last_start);
+	dev_set_drvdata(dev, ids);
+
+ probe_error:
+	return ret;
+}
+
+static int idscount_remove(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct idscount_plat_data *pd = dev->platform_data;
+	struct idscount_s *ids = dev_get_drvdata(dev);
+	int irq_pin;
+
+	device_remove_file(dev, &ids->attr_min0);
+	device_remove_file(dev, &ids->attr_min1);
+	device_remove_file(dev, &ids->attr_count);
+	device_remove_file(dev, &ids->attr_val);
+	device_remove_file(dev, &ids->attr_mode);
+	device_remove_file(dev, &ids->attr_last);
+	device_remove_file(dev, &ids->attr_enel_mode);
+	device_remove_file(dev, &ids->attr_enel_space);
+	device_remove_file(dev, &ids->attr_enel_min_len);
+	device_remove_file(dev, &ids->attr_enel_max_len);
+	device_remove_file(dev, &ids->attr_enel_min_intra);
+	device_remove_file(dev, &ids->attr_enel_last_start);
+
+	irq_pin = gpio_to_irq(pd->pin);
+	free_irq(irq_pin, dev);
+	kfree(ids);
+
+	return 0;
+}
+
+static struct platform_driver idscount_driver = {
+	.probe		= idscount_probe,
+	.remove		= idscount_remove,
+	.driver		= {
+		.owner	= THIS_MODULE,
+		.name	= "idscount",
+	},
+};
+
+
+static char banner[] __initdata = KERN_INFO "idscount, (c) 2012-2020 EVOL Srl \n";
+
+static int __init idscount_init(void)
+{
+	printk(banner);
+	return platform_driver_register(&idscount_driver);
+}
+
+static void __exit idscount_exit(void)
+{
+	platform_driver_unregister(&idscount_driver);
+}
+
+module_init(idscount_init);
+module_exit(idscount_exit);
+
+MODULE_AUTHOR("Christian Pellegrin <chripell@evolware.org>");
+MODULE_DESCRIPTION("Interrupt Driven Simple COUNTer");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:idscount");
